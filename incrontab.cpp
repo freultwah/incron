@@ -140,7 +140,7 @@ bool IncronTabEntry::Parse(const std::string& rStr, IncronTabEntry& rEntry)
   rEntry.m_fDotDirs = false;
   
   if (sscanf(s2.c_str(), "%lu", &u) == 1) {
-    rEntry.m_uMask = (uint32_t) u;
+    rEntry.m_uMask = static_cast<uint32_t>(u);
   }
   else {
     StringTokenizer tok2(s2);
@@ -284,6 +284,5 @@ std::string IncronTab::GetSystemTablePath(const std::string& rName)
     
   return IncronCfg::BuildPath(s, rName);
 }
-
 
 

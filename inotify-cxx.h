@@ -35,8 +35,9 @@
 #include <sys/syscall.h>
 #include <sys/inotify.h>
 
-// Use this if syscalls not defined
-#if not defined(__NR_inotify_init) && not defined(__NR_inotify_init1)
+// Older Linux systems may need syscall-number shims. FreeBSD exposes
+// inotify_* from <sys/inotify.h> directly and does not ship this header.
+#if defined(__linux__) && !defined(__NR_inotify_init) && !defined(__NR_inotify_init1)
 #include <sys/inotify-syscalls.h>
 #endif // __NR_inotify_init
 
@@ -245,8 +246,8 @@ public:
     m_uCookie(0)
   {
     if (pEvt != NULL) {
-      m_uMask = (uint32_t) pEvt->mask;
-      m_uCookie = (uint32_t) pEvt->cookie;
+      m_uMask = static_cast<uint32_t>(pEvt->mask);
+      m_uCookie = static_cast<uint32_t>(pEvt->cookie);
       m_name = pEvt->len > 0 ? pEvt->name : "";
       m_pWatch = pWatch;
     }
@@ -313,7 +314,7 @@ public:
    */
   inline uint32_t GetLength() const
   {
-    return (uint32_t) m_name.length();
+    return static_cast<uint32_t>(m_name.length());
   }
   
   /// Returns the event name.
@@ -391,10 +392,11 @@ public:
    * \param[in] uMask mask for events
    * \param[in] fEnabled events enabled yes/no
    */
-  InotifyWatch(const std::string& rPath, int32_t uMask, bool fEnabled = true)
+  InotifyWatch(const std::string& rPath, uint32_t uMask, bool fEnabled = true)
   : m_path(rPath),
     m_uMask(uMask),
-    m_wd((int32_t) -1),
+    m_wd(-1),
+    m_pInotify(NULL),
     m_fEnabled(fEnabled)
   {
     IN_LOCK_INIT
@@ -430,7 +432,7 @@ public:
    */
   inline uint32_t GetMask() const
   {
-    return (uint32_t) m_uMask;
+    return m_uMask;
   }
   
   /// Sets the watch event mask.
@@ -605,7 +607,7 @@ public:
   inline size_t GetWatchCount() const
   {
     IN_READ_BEGIN
-    size_t n = (size_t) m_paths.size();
+    size_t n = m_paths.size();
     IN_READ_END
     return n;
   }
@@ -619,7 +621,7 @@ public:
   inline size_t GetEnabledCount() const
   {
     IN_READ_BEGIN
-    size_t n = (size_t) m_watches.size();
+    size_t n = m_watches.size();
     IN_READ_END
     return n;
   }
@@ -648,7 +650,7 @@ public:
   inline size_t GetEventCount()
   {
     IN_READ_BEGIN
-    size_t n = (size_t) m_events.size();
+    size_t n = m_events.size();
     IN_READ_END
     return n;
   }
@@ -882,4 +884,3 @@ private:
 
 
 #endif //_INOTIFYCXX_H_
-

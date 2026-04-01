@@ -77,7 +77,7 @@ public:
   /**
    * \return event mask
    */
-  inline int32_t GetMask() const
+  inline uint32_t GetMask() const
   {
     return m_uMask;
   }
@@ -183,7 +183,7 @@ public:
    */
   inline int GetCount() const
   {
-    return (int) m_tab.size();
+    return static_cast<int>(m_tab.size());
   }
   
   /// Returns an entry.
@@ -196,7 +196,7 @@ public:
    */
   inline IncronTabEntry& GetEntry(int index)
   {
-    return m_tab[index];
+    return m_tab[static_cast<size_t>(index)];
   }
   
   /// Loads the table.

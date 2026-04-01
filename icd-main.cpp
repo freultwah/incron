@@ -73,7 +73,7 @@
 SUT_MAP g_ut;
 
 /// Finish program yes/no
-volatile bool g_fFinish = false;
+volatile sig_atomic_t g_fFinish = 0;
 
 /// Pipe for notifying about dead children
 int g_cldPipe[2];
@@ -81,6 +81,14 @@ int g_cldPipe[2];
 // Buffer for emptying child pipe
 #define CHILD_PIPE_BUF_LEN 32
 char g_cldPipeBuf[CHILD_PIPE_BUF_LEN];
+
+static void notify_main(char token)
+{
+  if (g_cldPipe[1] != -1) {
+    ssize_t res = write(g_cldPipe[1], &token, 1);
+    (void) res;
+  }
+}
 
 /// Daemonize true/false
 bool g_daemon = true;
@@ -102,20 +110,26 @@ void on_signal(int signo)
   switch (signo) {
     case SIGTERM:
     case SIGINT:
-      g_fFinish = true;
+      g_fFinish = 1;
+      notify_main('T');
       break;
     case SIGCHLD:
-      do {} while (waitpid((pid_t)-1, 0, WNOHANG) > 0); /* Prevent zombies */
-      // first empty pipe (to prevent internal buffer overflow)
-      do {} while (read(g_cldPipe[0], g_cldPipeBuf, CHILD_PIPE_BUF_LEN) > 0);
-      
-      // now write one character
-      if (write(g_cldPipe[1], "X", 1) <= 0) {
-        syslog(LOG_WARNING, "cannot send SIGCHLD token to notification pipe");
-      }
+      notify_main('C');
       break;
     default:;
   }
+}
+
+static void install_signal_handler(int signo)
+{
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = on_signal;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+
+  if (sigaction(signo, &sa, NULL) != 0)
+    throw InotifyException("cannot install signal handler", errno, NULL);
 }
 
 
@@ -295,11 +309,11 @@ bool check_parameter(const char* s, const char* shortCmd, const char* longCmd)
 void init_poll_array(struct pollfd pfd[], int pipefd, int infd)
 {
   pfd[0].fd = pipefd;
-  pfd[0].events = (short) POLLIN;
-  pfd[0].revents = (short) 0;
+  pfd[0].events = POLLIN;
+  pfd[0].revents = 0;
   pfd[1].fd = infd;
-  pfd[1].events = (short) POLLIN;
-  pfd[1].revents = (short) 0;
+  pfd[1].events = POLLIN;
+  pfd[1].revents = 0;
 }
 
 
@@ -432,14 +446,15 @@ int main(int argc, char** argv)
     
     prepare_pipe();
     
+    uint32_t wm = IN_CREATE | IN_CLOSE_WRITE | IN_DELETE | IN_MOVE | IN_DELETE_SELF | IN_UNMOUNT;
+    InotifyWatch stw(sysBase, wm);
+    InotifyWatch utw(userBase, wm);
+
     Inotify in;
     in.SetNonBlock(true);
     in.SetCloseOnExec(true);
-    
-    uint32_t wm = IN_CREATE | IN_CLOSE_WRITE | IN_DELETE | IN_MOVE | IN_DELETE_SELF | IN_UNMOUNT;
-    InotifyWatch stw(sysBase, wm);
+
     in.Add(stw);
-    InotifyWatch utw(userBase, wm);
     in.Add(utw);
     
     EventDispatcher ed(g_cldPipe[0], &in, &stw, &utw);
@@ -455,15 +470,15 @@ int main(int argc, char** argv)
     
     ed.Rebuild(); // not too efficient, but simple 
     
-    signal(SIGTERM, on_signal);
-    signal(SIGINT, on_signal);
-    signal(SIGCHLD, on_signal);
+    install_signal_handler(SIGTERM);
+    install_signal_handler(SIGINT);
+    install_signal_handler(SIGCHLD);
     
     syslog(LOG_NOTICE, "ready to process filesystem events");
     
     while (!g_fFinish) {
       
-      int res = poll(ed.GetPollData(), ed.GetSize(), -1);
+      int res = poll(ed.GetPollData(), static_cast<nfds_t>(ed.GetSize()), -1);
       
       if (res > 0) {
         ed.ProcessEvents();

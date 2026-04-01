@@ -27,6 +27,10 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <cstdio>
+#ifdef __FreeBSD__
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#endif
 //#include <syslog.h> // TODO remove
 
 #include "inotify-cxx.h"
@@ -108,7 +112,7 @@ uint32_t InotifyEvent::GetMaskByName(const std::string& rName)
     return IN_MOVE_SELF;
 #endif // IN_MOVE_SELF
     
-  return (uint32_t) 0;
+  return 0;
 }
 
 void InotifyEvent::DumpTypes(uint32_t uValue, std::string& rStr)
@@ -311,7 +315,9 @@ Inotify::Inotify() throw (InotifyException)
   
 Inotify::~Inotify()
 {
-  Close();
+  try {
+    Close();
+  } catch (InotifyException) {}
   
   IN_LOCK_DONE
 }
@@ -398,8 +404,10 @@ void Inotify::Remove(InotifyWatch* pWatch) throw (InotifyException)
     
     // removing watch failed - go away
     if (inotify_rm_watch(m_fd, pWatch->m_wd) == -1) {
-      IN_WRITE_END_NOTHROW
-      throw InotifyException(IN_EXC_MSG("removing watch failed"), errno, this);
+      if (!(errno == EINVAL || errno == EBADF)) {
+        IN_WRITE_END_NOTHROW
+        throw InotifyException(IN_EXC_MSG("removing watch failed"), errno, this);
+      }
     }
     m_watches.erase(pWatch->m_wd);
     pWatch->m_wd = -1;
@@ -419,7 +427,7 @@ void Inotify::RemoveAll()
   while (it != m_paths.end()) {
     InotifyWatch* pW = (*it).second;
     if (pW->m_wd != -1) {
-      inotify_rm_watch(m_fd, pW->m_wd);
+      (void) inotify_rm_watch(m_fd, pW->m_wd);
       pW->m_wd = -1;
     }
     pW->m_pInotify = NULL;
@@ -448,9 +456,9 @@ void Inotify::WaitForEvents(bool fNoIntr) throw (InotifyException)
   
   IN_WRITE_BEGIN
   
-  ssize_t i = 0;
-  while (i < len) {
-    struct inotify_event* pEvt = (struct inotify_event*) &m_buf[i];
+  size_t i = 0;
+  while (i < static_cast<size_t>(len)) {
+    struct inotify_event* pEvt = reinterpret_cast<struct inotify_event*>(&m_buf[i]);
     InotifyWatch* pW = FindWatch(pEvt->wd);
     if (pW != NULL) {
       InotifyEvent evt(pEvt, pW);
@@ -459,7 +467,7 @@ void Inotify::WaitForEvents(bool fNoIntr) throw (InotifyException)
         pW->__Disable();
       m_events.push_back(evt);
     }
-    i += INOTIFY_EVENT_SIZE + (ssize_t) pEvt->len;
+    i += INOTIFY_EVENT_SIZE + pEvt->len;
   }
   
   IN_WRITE_END
@@ -586,6 +594,18 @@ void Inotify::SetCloseOnExec(bool fClOnEx) throw (InotifyException)
 
 uint32_t Inotify::GetCapability(InotifyCapability_t cap) throw (InotifyException)
 {
+#ifdef __FreeBSD__
+  const std::string name = GetCapabilityPath(cap);
+  uint32_t val = 0;
+  size_t len = sizeof(val);
+  if (sysctlbyname(name.c_str(), &val, &len, NULL, 0) != 0)
+    throw InotifyException(IN_EXC_MSG("cannot get capability"), errno, NULL);
+
+  if (len != sizeof(val))
+    throw InotifyException(IN_EXC_MSG("cannot get capability"), EIO, NULL);
+
+  return val;
+#else
   FILE* f = fopen(GetCapabilityPath(cap).c_str(), "r");
   if (f == NULL)
     throw InotifyException(IN_EXC_MSG("cannot get capability"), errno, NULL);
@@ -598,36 +618,55 @@ uint32_t Inotify::GetCapability(InotifyCapability_t cap) throw (InotifyException
   
   fclose(f);
   
-  return (uint32_t) val;
+  return val;
+#endif
 }
 
 void Inotify::SetCapability(InotifyCapability_t cap, uint32_t val) throw (InotifyException)
 {
+#ifdef __FreeBSD__
+  const std::string name = GetCapabilityPath(cap);
+  if (sysctlbyname(name.c_str(), NULL, NULL, &val, sizeof(val)) != 0)
+    throw InotifyException(IN_EXC_MSG("cannot set capability"), errno, NULL);
+#else
   FILE* f = fopen(GetCapabilityPath(cap).c_str(), "w");
   if (f == NULL)
     throw InotifyException(IN_EXC_MSG("cannot set capability"), errno, NULL);
     
-  if (fprintf(f, "%u", (unsigned int) val) <= 0) {
+  if (fprintf(f, "%u", val) <= 0) {
     fclose(f);
     throw InotifyException(IN_EXC_MSG("cannot set capability"), EIO, NULL);
   }
   
   fclose(f);
+#endif
 }
 
 std::string Inotify::GetCapabilityPath(InotifyCapability_t cap) throw (InotifyException)
 {
+#ifdef __FreeBSD__
+  std::string path("vfs.inotify.");
+#else
   std::string path(PROCFS_INOTIFY_BASE);
+#endif
   
   switch (cap) {
     case IN_MAX_EVENTS:
+#ifdef __FreeBSD__
       path.append("max_queued_events");
+#else
+      path.append("max_queued_events");
+#endif
       break;
     case IN_MAX_INSTANCES:
       path.append("max_user_instances");
       break;
     case IN_MAX_WATCHES:
+#ifdef __FreeBSD__
       path.append("max_user_watches");
+#else
+      path.append("max_user_watches");
+#endif
       break;
     default:
       throw InotifyException(IN_EXC_MSG("unknown capability type"), EINVAL, NULL);

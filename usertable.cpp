@@ -21,6 +21,7 @@
 
 
 #include <pwd.h>
+#include <signal.h>
 #include <syslog.h>
 #include <errno.h>
 #include <sys/wait.h>
@@ -49,7 +50,7 @@
 
 PROC_MAP UserTable::s_procMap;
 
-extern volatile bool g_fFinish;
+extern volatile sig_atomic_t g_fFinish;
 extern SUT_MAP g_ut;
 
 
@@ -80,11 +81,26 @@ EventDispatcher::~EventDispatcher()
 
 bool EventDispatcher::ProcessEvents()
 {
+  std::vector<int> readyFds;
+  readyFds.reserve(m_size > 2 ? m_size - 2 : 0);
+
+  for (size_t i=2; i<m_size; i++) {
+    if (m_pPoll[i].revents & POLLIN)
+      readyFds.push_back(m_pPoll[i].fd);
+  }
+
   // consume pipe events if any (and report back)
   bool pipe = (m_pPoll[0].revents & POLLIN);
   if (pipe) {
-    char c;
-    while (read(m_pPoll[0].fd, &c, 1) > 0) {}
+    char buf[32];
+    ssize_t len = 0;
+    while ((len = read(m_pPoll[0].fd, buf, sizeof(buf))) > 0) {
+      for (ssize_t i=0; i<len; i++) {
+        if (buf[i] == 'C') {
+          while (waitpid(static_cast<pid_t>(-1), 0, WNOHANG) > 0) {}
+        }
+      }
+    }
     m_pPoll[0].revents = 0;
   }
 
@@ -96,21 +112,16 @@ bool EventDispatcher::ProcessEvents()
 
   InotifyEvent evt;
 
-  for (size_t i=2; i<m_size; i++) {
+  for (std::vector<int>::const_iterator fdIt = readyFds.begin(); fdIt != readyFds.end(); ++fdIt) {
+    FDUT_MAP::iterator it = m_maps.find(*fdIt);
+    if (it != m_maps.end()) {
+      Inotify* pIn = ((*it).second)->GetInotify();
+      pIn->WaitForEvents(true);
 
-    // process events if occurred
-    if (m_pPoll[i].revents & POLLIN) {
-      FDUT_MAP::iterator it = m_maps.find(m_pPoll[i].fd);
-      if (it != m_maps.end()) {
-        Inotify* pIn = ((*it).second)->GetInotify();
-        pIn->WaitForEvents(true);
-
-        // process events for this object
-        while (pIn->GetEvent(evt)) {
-          ((*it).second)->OnEvent(evt);
-        }
+      // process events for this object
+      while (pIn->GetEvent(evt)) {
+        ((*it).second)->OnEvent(evt);
       }
-      m_pPoll[i].revents = 0;
     }
   }
 
@@ -179,7 +190,7 @@ void EventDispatcher::ProcessMgmtEvents()
     if (e.GetWatch() == m_pSys) {
       if (e.IsType(IN_DELETE_SELF) || e.IsType(IN_UNMOUNT)) {
         syslog(LOG_CRIT, "base directory destroyed, exitting");
-        g_fFinish = true;
+        g_fFinish = 1;
       }
       else if (!e.GetName().empty()) {
 		//ignore all names that start with a dot
@@ -213,7 +224,7 @@ void EventDispatcher::ProcessMgmtEvents()
     else if (e.GetWatch() == m_pUser) {
       if (e.IsType(IN_DELETE_SELF) || e.IsType(IN_UNMOUNT)) {
         syslog(LOG_CRIT, "base directory destroyed, exitting");
-        g_fFinish = true;
+        g_fFinish = 1;
       }
       else if (!e.GetName().empty()) {
         SUT_MAP::iterator it = g_ut.find(IncronCfg::BuildPath(m_pUser->GetPath(), e.GetName()));
@@ -345,7 +356,11 @@ void UserTable::Dispose()
   IWCE_MAP::iterator it = m_map.begin();
   while (it != m_map.end()) {
     InotifyWatch* pW = (*it).first;
-    m_in.Remove(pW);
+    try {
+      m_in.Remove(pW);
+    } catch (InotifyException e) {
+      syslog(LOG_WARNING, "cannot remove watch for %s: (%i) %s", pW->GetPath().c_str(), e.GetErrorNumber(), strerror(e.GetErrorNumber()));
+    }
 
     PROC_MAP::iterator it2 = s_procMap.begin();
     while (it2 != s_procMap.end()) {
@@ -378,12 +393,19 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
   // discard event if user has no access rights to watch path
   if (!(m_fSysTable || MayAccess(pW->GetPath(), DONT_FOLLOW(rEvt.GetMask()))))
     return;
+
+  const std::string watchPath = pW->GetPath();
+  const std::string cs = pE->GetCmd();
+#ifdef LOOPER
+  const bool noLoop = pE->IsNoLoop();
+  bool reloaded = false;
+#endif
     
   //#if 0
   // log output for each dir + file + event
   std::string events;
   rEvt.DumpTypes(events);
-  syslog(LOG_INFO, "PATH (%s) FILE (%s) EVENT (%s)", pW->GetPath().c_str() , IncronTabEntry::GetSafePath(rEvt.GetName()).c_str() , events.c_str());
+  syslog(LOG_INFO, "PATH (%s) FILE (%s) EVENT (%s)", watchPath.c_str() , IncronTabEntry::GetSafePath(rEvt.GetName()).c_str() , events.c_str());
   //#endif
   
   // add new watch for newly created subdirs
@@ -392,6 +414,9 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
 	Dispose();
 	sleep (1);
 	Load();
+#ifdef LOOPER
+    reloaded = true;
+#endif
   // this is the fast way of registering new subsirs, but it 
   // misses new sub-sub dirs if they are created too fast in a row
   // eg by : mkdir -p /tmp/a/b/c/d/e
@@ -408,7 +433,6 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
   }
 
   std::string cmd;
-  const std::string& cs = pE->GetCmd();
   size_t pos = 0;
   size_t oldpos = 0;
   size_t len = cs.length();
@@ -422,7 +446,7 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
       else {
         cmd.append(cs.substr(oldpos, pos-oldpos));
         if (cs[px] == '@') {          // base path
-          cmd.append(IncronTabEntry::GetSafePath(pW->GetPath()));
+          cmd.append(IncronTabEntry::GetSafePath(watchPath));
           oldpos = pos + 2;
         }
         else if (cs[px] == '#') {     // file name
@@ -438,7 +462,7 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
         else if (cs[px] == '&') {     // numeric mask
           char* s;
 #pragma GCC diagnostic ignored "-Wunused-result"  
-          asprintf(&s, "%u", (unsigned) rEvt.GetMask());
+          asprintf(&s, "%u", static_cast<unsigned>(rEvt.GetMask()));
 #pragma GCC diagnostic warning "-Wunused-result"
           cmd.append(s);
           free(s);
@@ -462,7 +486,7 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
     syslog(LOG_INFO, "(%s) CMD (%s)", m_user.c_str(), cmd.c_str());
     
 #ifdef LOOPER
-  if (pE->IsNoLoop())
+  if (noLoop && !reloaded)
     pW->SetEnabled(false);
 #endif
 
@@ -481,7 +505,7 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
       // for user table
       RunAsUser(cmd);
 #ifdef LOOPER
-	  if (pE->IsNoLoop())
+	  if (noLoop && !reloaded)
 		pW->SetEnabled(true);
 #endif
     }
@@ -489,7 +513,7 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
   else if (pid > 0) {
 #ifdef LOOPER
     ProcData_t pd;
-    if (pE->IsNoLoop()) {
+    if (noLoop && !reloaded) {
       pd.onDone = on_proc_done;
       pd.pWatch = pW;
     }
@@ -503,7 +527,7 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
   }
   else {
 #ifdef LOOPER
-    if (pE->IsNoLoop())
+    if (noLoop && !reloaded)
       pW->SetEnabled(true);
 #endif
 
@@ -538,6 +562,9 @@ bool UserTable::MayAccess(const std::string& rPath, bool fNoFollow) const
   // retrieve user data
   struct passwd* pwd = getpwnam(m_user.c_str());
 
+  if (pwd == NULL)
+    return false;
+
   // root may always access
   if (pwd->pw_uid == 0)
     return true;
@@ -546,7 +573,7 @@ bool UserTable::MayAccess(const std::string& rPath, bool fNoFollow) const
   if (st.st_mode & S_IRWXG) {
 
     // user's primary group
-    if (pwd != NULL && pwd->pw_gid == st.st_gid)
+    if (pwd->pw_gid == st.st_gid)
         return true;
 
     // now check group database
@@ -564,14 +591,14 @@ bool UserTable::MayAccess(const std::string& rPath, bool fNoFollow) const
 
   // file accessible to owner
   if (st.st_mode & S_IRWXU) {
-    if (pwd != NULL && pwd->pw_uid == st.st_uid)
+    if (pwd->pw_uid == st.st_uid)
       return true;
   }
 
   return false; // no access right found
 }
 
-#ifndef __linux__
+#if !defined(__linux__) && !defined(__FreeBSD__)
 static int
 clearenv(void)
 {
@@ -608,11 +635,13 @@ void UserTable::RunAsUser(std::string cmd) const
     }
   }
   
-  execlp("/bin/bash","/bin/bash", "-c", cmd.c_str(), (char *)NULL);
+  execl("/bin/bash", "/bin/bash", "-c", cmd.c_str(), static_cast<char*>(NULL));
+  execl("/usr/local/bin/bash", "/usr/local/bin/bash", "-c", cmd.c_str(), static_cast<char*>(NULL));
+  execlp("bash", "bash", "-c", cmd.c_str(), static_cast<char*>(NULL));
+  execl("/bin/sh", "/bin/sh", "-c", cmd.c_str(), static_cast<char*>(NULL));
 
 failed:
 
   syslog(LOG_ERR, "cannot exec process: %s", strerror(errno));
   _exit(1);
 }
-
