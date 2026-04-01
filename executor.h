@@ -2,9 +2,9 @@
 #define _EXECUTOR_H_
 /**
  * \file executor.h
- * 
+ *
  * Copyright (C) 2015 Andreas Altair Redmer, <altair.ibn.la.ahad.sy@gmail.com>
- * 
+ *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of one of the following licenses:
  *
@@ -13,113 +13,106 @@
  *
  * If you want to help with choosing the best license for you,
  * please visit http://www.gnu.org/licenses/license-list.html.
- * 
+ *
  */
 
-#include <iostream>
+#include <dirent.h>
+#include <glob.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
+#include <set>
 #include <string>
 #include <vector>
-#include <sstream>
 
 class Executor
 {
 	private:
-	
-		inline static std::string trim_right_copy(
-		  const std::string& s,
-		  const std::string& delimiters = " \f\n\r\t\v" )
+		static bool hasDotComponent(const std::string& path)
 		{
-			//cout << "trc" << endl;
-			if (s.length()==0)
-				return "";
-			//cout << "trc" <<s.find_last_not_of( delimiters ) + 1 << endl;
-			return s.substr( 0, s.find_last_not_of( delimiters ) + 1 );
-		}
-
-		inline static std::string trim_left_copy(
-		  const std::string& s,
-		  const std::string& delimiters = " \f\n\r\t\v" )
-		{
-			//cout << "tlc" << endl;
-			if (s.length()==0)
-				return "";
-			//cout << "tlc" << s.find_first_not_of( delimiters ) << " -- "<< delimiters << endl;
-			return s.substr( s.find_first_not_of( delimiters ) );
-		}
-
-		inline static std::string trim_copy(
-		  const std::string& s,
-		  const std::string& delimiters = " \f\n\r\t\v\'\"-" )
-		{
-			//cout << "tc" << endl;
-			if (s.length()==0)
-				return "";
-			return trim_left_copy( trim_right_copy( s, delimiters ), delimiters );
-		}
-		
-	public:
-//		static std::string plain_exec(std::string cmd) 
-//		{
-//			return plain_exec(cmd.c_str());
-//		}
-		
-		static std::string plain_exec(char* cmd) 
-		{
-			//cout << "plain_exec " <<cmd<< endl;
-			FILE* pipe = popen(cmd, "r");
-			if (!pipe) return "EXECPIPEERROR";
-			char buffer[128];
-			std::string result = "";
-			while(!feof(pipe)) {
-				if(fgets(buffer, 128, pipe) != NULL)
-					result += buffer;
+			size_t start = 0;
+			while (start < path.length()) {
+				size_t end = path.find('/', start);
+				if (end == std::string::npos)
+					end = path.length();
+				if (end > start && path[start] == '.')
+					return true;
+				start = end + 1;
 			}
-			pclose(pipe);
-			//cout << "plain_exec end" << endl;
-			//return result;
-			return trim_copy(result);
-		}
-				
-		
-//		static const vector<string> execBashVec (string script);
-//		static const string execBash (string script);
-
-		static const std::vector<std::string> execBashVec (std::string script)
-		{
-			std::string s = execBash (script);
-			// from split
-			std::vector<std::string> elems;
-				std::stringstream ss(s);
-				std::string item;
-				while (std::getline(ss, item, '\n')) {
-					elems.push_back(item);
-				}
-			return elems;
+			return false;
 		}
 
-		static const std::string execBash (std::string script)
+		static bool shouldInclude(const std::string& path, bool includeDotDirs)
 		{
-			//cout << "execBash: " << script << endl;
-			std::string ret = plain_exec ((char*) script.c_str());
-			return ret;
+			return includeDotDirs || !hasDotComponent(path);
 		}
-	
-		// TODO make not stupid: no boost, no cli dependeny, no c++14 (for now)
-		// suppression of warning for not existign directories added
-		/**
-		 *Returns all subdirectories of the dirctory 'dir' as vector of strings.
-		 */
-		static const std::vector<std::string> getSubDirVec (std::string dir, bool includeDotDirs=false)
+
+		static void collectPaths(const std::string& path, bool includeDotDirs, bool dirsOnly, std::set<std::string>& out)
 		{
-			return execBashVec("find "+dir+" -type d "+ (includeDotDirs?std::string():std::string("! -path '*/.*' ")) +"2>/dev/null");
+			struct stat st;
+			if (lstat(path.c_str(), &st) != 0)
+				return;
+
+			const bool isDir = S_ISDIR(st.st_mode);
+			if ((!dirsOnly || isDir) && shouldInclude(path, includeDotDirs))
+				out.insert(path);
+
+			if (!isDir)
+				return;
+
+			DIR* dir = opendir(path.c_str());
+			if (dir == NULL)
+				return;
+
+			struct dirent* entry = NULL;
+			while ((entry = readdir(dir)) != NULL) {
+				const std::string name(entry->d_name);
+				if (name == "." || name == "..")
+					continue;
+				if (!includeDotDirs && !name.empty() && name[0] == '.')
+					continue;
+				collectPaths(path + "/" + name, includeDotDirs, dirsOnly, out);
+			}
+
+			closedir(dir);
 		}
-		
-		/**
-		 *Returns all files in case the file decriptor contains a star.
-		 */
-		static const std::vector<std::string> getAllFilesByDescriptor (std::string dir, bool includeDotDirs=false)
+
+		static std::vector<std::string> expandDescriptor(const std::string& path, bool includeDotDirs, bool dirsOnly)
 		{
-			return execBashVec("find "+dir+" "+ (includeDotDirs?std::string():std::string("! -path '*/.*' ")) +"2>/dev/null");
+			std::set<std::string> collected;
+			glob_t matches;
+			const int res = glob(path.c_str(), GLOB_NOSORT, NULL, &matches);
+			if (res == 0) {
+				for (size_t i=0; i<matches.gl_pathc; ++i)
+					collectPaths(matches.gl_pathv[i], includeDotDirs, dirsOnly, collected);
+				globfree(&matches);
+			}
+			else if (res == GLOB_NOMATCH) {
+				globfree(&matches);
+				collectPaths(path, includeDotDirs, dirsOnly, collected);
+			}
+			else {
+				globfree(&matches);
+			}
+
+			return std::vector<std::string>(collected.begin(), collected.end());
+		}
+
+	public:
+		/**
+		 * Returns all subdirectories of the directory descriptor as vector of strings.
+		 */
+		static const std::vector<std::string> getSubDirVec(std::string dir, bool includeDotDirs=false)
+		{
+			return expandDescriptor(dir, includeDotDirs, true);
+		}
+
+		/**
+		 * Returns all files in case the file descriptor contains a star.
+		 */
+		static const std::vector<std::string> getAllFilesByDescriptor(std::string dir, bool includeDotDirs=false)
+		{
+			return expandDescriptor(dir, includeDotDirs, false);
 		}
 };
 
