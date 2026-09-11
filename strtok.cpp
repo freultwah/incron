@@ -68,19 +68,17 @@ std::string StringTokenizer::StripPrefix(const char* s, SIZE cnt)
   std::ostringstream stream;
   SIZE pos = 0;
   while (pos < cnt) {
-    if (s[pos] == m_cPrefix) {
-      if ((pos < cnt - 1) && s[pos+1] == m_cPrefix) {
-        stream << m_cPrefix;
-        pos++;
-      }
+    if (s[pos] == m_cPrefix && pos + 1 < cnt) {
+      // the prefix introduces the next character literally
+      stream << s[pos+1];
+      pos += 2;
     }
     else {
       stream << s[pos];
+      pos++;
     }
-    
-    pos++;
   }
-  
+
   return stream.str();
 }
 
