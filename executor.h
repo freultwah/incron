@@ -23,10 +23,15 @@
 
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 class Executor
 {
+	/// Maximum directory nesting depth to descend into
+	/// (guards against stack exhaustion on pathological trees)
+	static const int MAX_DEPTH = 1024;
+
 	private:
 		static bool hasDotComponent(const std::string& path)
 		{
@@ -49,32 +54,43 @@ class Executor
 
 		static void collectPaths(const std::string& path, bool includeDotDirs, bool dirsOnly, std::set<std::string>& out)
 		{
-			struct stat st;
-			if (lstat(path.c_str(), &st) != 0)
-				return;
+			// iterative traversal with an explicit stack - recursion
+			// would overflow the stack on deeply nested trees
+			std::vector<std::pair<std::string, int> > stack;
+			stack.push_back(std::make_pair(path, 0));
 
-			const bool isDir = S_ISDIR(st.st_mode);
-			if ((!dirsOnly || isDir) && shouldInclude(path, includeDotDirs))
-				out.insert(path);
+			while (!stack.empty()) {
+				const std::string current = stack.back().first;
+				const int depth = stack.back().second;
+				stack.pop_back();
 
-			if (!isDir)
-				return;
-
-			DIR* dir = opendir(path.c_str());
-			if (dir == NULL)
-				return;
-
-			struct dirent* entry = NULL;
-			while ((entry = readdir(dir)) != NULL) {
-				const std::string name(entry->d_name);
-				if (name == "." || name == "..")
+				struct stat st;
+				if (lstat(current.c_str(), &st) != 0)
 					continue;
-				if (!includeDotDirs && !name.empty() && name[0] == '.')
+
+				const bool isDir = S_ISDIR(st.st_mode);
+				if ((!dirsOnly || isDir) && shouldInclude(current, includeDotDirs))
+					out.insert(current);
+
+				if (!isDir || depth >= MAX_DEPTH)
 					continue;
-				collectPaths(path + "/" + name, includeDotDirs, dirsOnly, out);
+
+				DIR* dir = opendir(current.c_str());
+				if (dir == NULL)
+					continue;
+
+				struct dirent* entry = NULL;
+				while ((entry = readdir(dir)) != NULL) {
+					const std::string name(entry->d_name);
+					if (name == "." || name == "..")
+						continue;
+					if (!includeDotDirs && !name.empty() && name[0] == '.')
+						continue;
+					stack.push_back(std::make_pair(current + "/" + name, depth + 1));
+				}
+
+				closedir(dir);
 			}
-
-			closedir(dir);
 		}
 
 		static std::vector<std::string> expandDescriptor(const std::string& path, bool includeDotDirs, bool dirsOnly)
