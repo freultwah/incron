@@ -371,10 +371,15 @@ void Inotify::Add(InotifyWatch* pWatch) throw (InotifyException)
     }
     
     // this path already watched (but defined another way) -
-    // inotify_add_watch returned the existing descriptor without
-    // creating a new watch, so there is nothing to clean up
+    // inotify_add_watch() did not create a new watch, it returned
+    // the existing descriptor AND updated its kernel mask to the
+    // new one - restore the original mask before giving up
     InotifyWatch* pW = FindWatchLocked(wd);
     if (pW != NULL) {
+      if (inotify_add_watch(m_fd, pW->GetPath().c_str(), pW->GetMask()) == -1) {
+        IN_WRITE_END_NOTHROW
+        throw InotifyException(IN_EXC_MSG("watch collision detected and mask recovery failed"), errno, this);
+      }
       IN_WRITE_END_NOTHROW
       throw InotifyException(IN_EXC_MSG("path already watched (but defined another way)"), EBUSY, this);
     }
