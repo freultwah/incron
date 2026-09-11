@@ -223,8 +223,13 @@ void EventDispatcher::ProcessMgmtEvents()
         else if (e.IsType(IN_CLOSE_WRITE) || e.IsType(IN_MOVED_TO)) {
           syslog(LOG_INFO, "system table %s created, loading", e.GetName().c_str());
           UserTable* pUt = new UserTable(this, e.GetName(), true);
-          g_ut.insert(SUT_MAP::value_type(IncronTab::GetSystemTablePath(e.GetName()), pUt));
-          pUt->Load();
+          if (pUt->Load())
+            g_ut.insert(SUT_MAP::value_type(IncronTab::GetSystemTablePath(e.GetName()), pUt));
+          else {
+            // not registered - a next change of the file will retry
+            syslog(LOG_WARNING, "cannot load table %s (will retry on next change)", e.GetName().c_str());
+            delete pUt;
+          }
         }
       }
     }
@@ -252,8 +257,13 @@ void EventDispatcher::ProcessMgmtEvents()
           if (UserTable::CheckUser(e.GetName().c_str())) {
             syslog(LOG_INFO, "table for user %s created, loading", e.GetName().c_str());
             UserTable* pUt = new UserTable(this, e.GetName(), false);
-            g_ut.insert(SUT_MAP::value_type(IncronTab::GetUserTablePath(e.GetName()), pUt));
-            pUt->Load();
+            if (pUt->Load())
+              g_ut.insert(SUT_MAP::value_type(IncronTab::GetUserTablePath(e.GetName()), pUt));
+            else {
+              // not registered - a next change of the file will retry
+              syslog(LOG_WARNING, "cannot load table for user %s (will retry on next change)", e.GetName().c_str());
+              delete pUt;
+            }
           }
         }
       }
