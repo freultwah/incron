@@ -499,19 +499,15 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
 
     // for system table
     if (m_fSysTable) {
-      if (system(cmd.c_str()) != 0) // exec failed
-      {
+      int rc = system(cmd.c_str());
+      if (rc == -1) // fork/exec failed
         syslog(LOG_ERR, "cannot exec process: %s", strerror(errno));
-        _exit(1);
-      }
+      // the child must not return to the event loop
+      _exit(rc == 0 ? 0 : 1);
     }
     else {
-      // for user table
+      // for user table (RunAsUser never returns)
       RunAsUser(cmd);
-#ifdef LOOPER
-	  if (noLoop)
-		pW->SetEnabled(true);
-#endif
     }
   }
   else if (pid > 0) {
