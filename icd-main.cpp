@@ -435,14 +435,14 @@ int main(int argc, char** argv)
         ret = 1;
         goto error;
       }
-  
+
     try {
-    if (!app.Lock()) {
-      syslog(LOG_CRIT, "another instance of incrond already running");
-      if (!g_daemon)
-        fprintf(stderr, "another instance of incrond already running\n");
-      ret = 1;
-      goto error;
+      if (!app.Lock()) {
+        syslog(LOG_CRIT, "another instance of incrond already running");
+        if (!g_daemon)
+          fprintf(stderr, "another instance of incrond already running\n");
+        ret = 1;
+        goto error;
       }
     } catch (AppInstException e) {
       syslog(LOG_CRIT, "instance lookup failed: (%i) %s", e.GetErrorNumber(), strerror(e.GetErrorNumber()));
@@ -451,7 +451,7 @@ int main(int argc, char** argv)
       ret = 1;
       goto error;
     }
-    
+
     prepare_pipe();
 
     // install the signal handlers before anything that may take a
@@ -470,53 +470,57 @@ int main(int argc, char** argv)
 
     in.Add(stw);
     in.Add(utw);
-    
+
     EventDispatcher ed(g_cldPipe[0], &in, &stw, &utw);
-    
+
     try {
       load_tables(&ed);
     } catch (InotifyException e) {
       int err = e.GetErrorNumber();
-      syslog(LOG_CRIT, "%s: (%i) %s", e.GetMessage().c_str(), err, strerror(err));
+      syslog(LOG_CRIT, "cannot load tables");
+      syslog(LOG_CRIT, "  %s", e.GetMessage().c_str());
+      syslog(LOG_CRIT, "  error: (%i) %s", err, strerror(err));
       ret = 1;
-      goto error;
     }
-    
-    ed.Rebuild(); // not too efficient, but simple 
-    
-    install_signal_handler(SIGTERM);
-    install_signal_handler(SIGINT);
-    install_signal_handler(SIGCHLD);
-    
-    syslog(LOG_NOTICE, "ready to process filesystem events");
-    
-    while (!g_fFinish) {
-      
-      int res = poll(ed.GetPollData(), static_cast<nfds_t>(ed.GetSize()), -1);
-      
-      if (res > 0) {
-        ed.ProcessEvents();
+
+    if (ret == 0) {
+      ed.Rebuild(); // not too efficient, but simple
+
+      syslog(LOG_NOTICE, "ready to process filesystem events");
+
+      try {
+        while (!g_fFinish) {
+
+          int res = poll(ed.GetPollData(), static_cast<nfds_t>(ed.GetSize()), -1);
+
+          if (res > 0) {
+            ed.ProcessEvents();
+          }
+          else if (res < 0) {
+            switch (errno) {
+              case EINTR:   // syscall interrupted - continue polling
+                break;
+              case EAGAIN:  // not enough resources - wait a moment and try again
+                syslog(LOG_WARNING, "polling failed due to resource shortage, retrying later...");
+                sleep(POLL_EAGAIN_WAIT);
+                break;
+              default:
+                throw InotifyException("polling failed", errno, NULL);
+            }
+          }
+        }
+      } catch (InotifyException e) {
+        int err = e.GetErrorNumber();
+        syslog(LOG_CRIT, "*** unhandled exception occurred ***");
+        syslog(LOG_CRIT, "  %s", e.GetMessage().c_str());
+        syslog(LOG_CRIT, "  error: (%i) %s", err, strerror(err));
+        ret = 1;
       }
-      else if (res < 0) {
-        switch (errno) {
-          case EINTR:   // syscall interrupted - continue polling
-            break;
-          case EAGAIN:  // not enough resources - wait a moment and try again
-            syslog(LOG_WARNING, "polling failed due to resource shortage, retrying later...");
-            sleep(POLL_EAGAIN_WAIT);
-            break;
-          default:
-            throw InotifyException("polling failed", errno, NULL);
-        } 
-      }
-      
-      // TODO try to do the finish thing all the time (there is a race condition somewhere
-      // it seem ProcessEvents returns too ealy sometimes
-      //UserTable::FinishDone();
     }
-    
+
+    // always dispose the tables while the dispatcher is still alive
     free_tables(&ed);
-    
+
     if (g_cldPipe[0] != -1)
       close(g_cldPipe[0]);
     if (g_cldPipe[1] != -1)
@@ -534,8 +538,8 @@ int main(int argc, char** argv)
 error:
 
   syslog(LOG_NOTICE, "stopping service");
-  
+
   closelog();
-  
+
   return ret;
 }
