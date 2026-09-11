@@ -305,8 +305,14 @@ void InotifyWatch::__Disable()
 Inotify::Inotify() throw (InotifyException)
 {
   IN_LOCK_INIT
-  
+
+#ifdef __linux__
+  // non-blocking and close-on-exec from the start - the descriptor
+  // must not leak into forked job processes
+  m_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+#else
   m_fd = inotify_init();
+#endif
   if (m_fd == -1) {
     IN_LOCK_DONE
     throw InotifyException(IN_EXC_MSG("inotify init failed"), errno, NULL);
