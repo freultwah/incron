@@ -144,7 +144,14 @@ void EventDispatcher::Register(UserTable* pTab)
 
 void EventDispatcher::Unregister(UserTable* pTab)
 {
-  FDUT_MAP::iterator it = m_maps.find(pTab->GetInotify()->GetDescriptor());
+  if (pTab == NULL)
+    return;
+
+  int fd = pTab->GetInotify()->GetDescriptor();
+  if (fd == -1)
+    return;
+
+  FDUT_MAP::iterator it = m_maps.find(fd);
   if (it != m_maps.end()) {
     m_maps.erase(it);
     Rebuild();
