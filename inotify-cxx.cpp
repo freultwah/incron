@@ -422,9 +422,19 @@ void Inotify::Remove(InotifyWatch* pWatch) throw (InotifyException)
     pWatch->m_wd = -1;
   }
 
+  // drop queued events that still reference this watch -
+  // they would otherwise carry a dangling pointer
+  std::deque<InotifyEvent>::iterator eit = m_events.begin();
+  while (eit != m_events.end()) {
+    if (eit->GetWatch() == pWatch)
+      eit = m_events.erase(eit);
+    else
+      eit++;
+  }
+
   m_paths.erase(pWatch->m_path);
   pWatch->m_pInotify = NULL;
-  
+
   IN_WRITE_END
 }
 
@@ -445,7 +455,8 @@ void Inotify::RemoveAll()
   
   m_watches.clear();
   m_paths.clear();
-  
+  m_events.clear();
+
   IN_WRITE_END
 }
 
