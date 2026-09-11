@@ -76,7 +76,7 @@ SUT_MAP g_ut;
 volatile sig_atomic_t g_fFinish = 0;
 
 /// Pipe for notifying about dead children
-int g_cldPipe[2];
+int g_cldPipe[2] = { -1, -1 };
 
 // Buffer for emptying child pipe
 #define CHILD_PIPE_BUF_LEN 32
@@ -453,7 +453,13 @@ int main(int argc, char** argv)
     }
     
     prepare_pipe();
-    
+
+    // install the signal handlers before anything that may take a
+    // while (table loading) so a SIGTERM is handled gracefully
+    install_signal_handler(SIGTERM);
+    install_signal_handler(SIGINT);
+    install_signal_handler(SIGCHLD);
+
     uint32_t wm = IN_CREATE | IN_CLOSE_WRITE | IN_DELETE | IN_MOVE | IN_DELETE_SELF | IN_UNMOUNT;
     InotifyWatch stw(sysBase, wm);
     InotifyWatch utw(userBase, wm);
@@ -515,6 +521,8 @@ int main(int argc, char** argv)
       close(g_cldPipe[0]);
     if (g_cldPipe[1] != -1)
       close(g_cldPipe[1]);
+    g_cldPipe[0] = -1;
+    g_cldPipe[1] = -1;
   } catch (InotifyException e) {
     int err = e.GetErrorNumber();
     syslog(LOG_CRIT, "*** unhandled exception occurred ***");
