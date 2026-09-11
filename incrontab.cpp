@@ -194,12 +194,20 @@ bool IncronTab::Load(const std::string& rPath)
     return false;
   
   char s[1000];
+  std::string line;
   IncronTabEntry e;
   while (fgets(s, 1000, f) != NULL) {
-    if (IncronTabEntry::Parse(s, e)) {
-      m_tab.push_back(e);
+    // accumulate chunks - a line may be longer than the buffer
+    line += s;
+    if (line[line.length()-1] == '\n') {
+      if (IncronTabEntry::Parse(line, e))
+        m_tab.push_back(e);
+      line.clear();
     }
   }
+  // handle a last line without a trailing newline
+  if (!line.empty() && IncronTabEntry::Parse(line, e))
+    m_tab.push_back(e);
   
   fclose(f);
   
