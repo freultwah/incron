@@ -268,6 +268,16 @@ private:
    */
   bool lookupUser(uid_t& rUid, gid_t& rGid) const;
 
-};
+  /// Registers a watch for a newly created subdirectory.
+  /**
+   * It also scans the new subtree so directories created before
+   * the watch was in place are registered as well.
+   *
+   * \param[in] rSubDir path of the new subdirectory
+   * \param[in] rE entry the subdirectory belongs to
+   */
+  void OnSubDirCreated(const std::string& rSubDir, IncronTabEntry& rE);
+
+ };
 
 #endif //_USERTABLE_H_

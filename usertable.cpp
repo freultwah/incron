@@ -413,7 +413,6 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
   const std::string cs = pE->GetCmd();
 #ifdef LOOPER
   const bool noLoop = pE->IsNoLoop();
-  bool reloaded = false;
 #endif
     
   //#if 0
@@ -424,27 +423,17 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
   //#endif
   
   // add new watch for newly created subdirs
-  if ( rEvt.IsType(IN_ISDIR) && (rEvt.IsType(IN_CREATE) || rEvt.IsType(IN_MOVED_TO)) )
+  if (    rEvt.IsType(IN_ISDIR)
+      &&  (rEvt.IsType(IN_CREATE) || rEvt.IsType(IN_MOVED_TO))
+      &&  !rEvt.GetName().empty()
+      &&  !pE->IsNoRecursion())
   {
-	Dispose();
-	sleep (1);
-	Load();
-#ifdef LOOPER
-    reloaded = true;
-#endif
-  // this is the fast way of registering new subsirs, but it 
-  // misses new sub-sub dirs if they are created too fast in a row
-  // eg by : mkdir -p /tmp/a/b/c/d/e
-  // so the reload is for now the better way to go
-  // the complete reload also happens if the incrontab file changes
-  /*
-  m_pEd->Unregister(this);
-	std::string * pECmd = new std::string(pE->GetCmd().c_str());
-	IncronTabEntry * newEntry = new IncronTabEntry(completeFile, pE->GetMask(),  *pECmd);
-	m_tab.Add(*newEntry);
-	AddTabEntry(*newEntry);
-  m_pEd->Register(this);
-  */ 
+    std::string subDir = watchPath;
+    if (subDir.empty() || subDir[subDir.length()-1] != '/')
+      subDir += '/';
+    subDir += rEvt.GetName();
+
+    OnSubDirCreated(subDir, *pE);
   }
 
   std::string cmd;
@@ -501,7 +490,7 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
     syslog(LOG_INFO, "(%s) CMD (%s)", m_user.c_str(), cmd.c_str());
     
 #ifdef LOOPER
-  if (noLoop && !reloaded)
+  if (noLoop)
     pW->SetEnabled(false);
 #endif
 
@@ -520,7 +509,7 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
       // for user table
       RunAsUser(cmd);
 #ifdef LOOPER
-	  if (noLoop && !reloaded)
+	  if (noLoop)
 		pW->SetEnabled(true);
 #endif
     }
@@ -528,7 +517,7 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
   else if (pid > 0) {
 #ifdef LOOPER
     ProcData_t pd;
-    if (noLoop && !reloaded) {
+    if (noLoop) {
       pd.onDone = on_proc_done;
       pd.pWatch = pW;
     }
@@ -542,13 +531,44 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
   }
   else {
 #ifdef LOOPER
-    if (noLoop && !reloaded)
+    if (noLoop)
       pW->SetEnabled(true);
 #endif
 
     syslog(LOG_ERR, "cannot fork process: %s", strerror(errno));
   }
 
+}
+
+void UserTable::OnSubDirCreated(const std::string& rSubDir, IncronTabEntry& rE)
+{
+  // skip if already watched
+  if (m_in.FindWatch(rSubDir) != NULL)
+    return;
+
+  // skip if it is not a directory (may have vanished already)
+  struct stat st;
+  if (lstat(rSubDir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode))
+    return;
+
+  // register the new directory itself
+  {
+    IncronTabEntry ite(rSubDir, rE.GetMask(), rE.GetCmd());
+    m_tab.Add(ite);
+    AddTabEntry(m_tab.GetEntry(m_tab.GetCount() - 1));
+  }
+
+  // close the race window: subdirectories may have appeared before
+  // the watch was in place (eg mkdir -p a/b/c) - register them too
+  std::vector<std::string> ssvec = Executor::getSubDirVec(rSubDir, rE.IsDotDirs());
+  for (size_t j = 0; j < ssvec.size(); j++) {
+    if (m_in.FindWatch(ssvec[j]) != NULL)
+      continue;
+
+    IncronTabEntry ite(ssvec[j], rE.GetMask(), rE.GetCmd());
+    m_tab.Add(ite);
+    AddTabEntry(m_tab.GetEntry(m_tab.GetCount() - 1));
+  }
 }
 
 IncronTabEntry* UserTable::FindEntry(InotifyWatch* pWatch)
