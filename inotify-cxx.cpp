@@ -486,16 +486,21 @@ void Inotify::WaitForEvents(bool fNoIntr) throw (InotifyException)
     InotifyWatch* pW = FindWatchLocked(pEvt->wd);
     if (pW != NULL) {
       InotifyEvent evt(pEvt, pW);
+      bool queue = true;
       if (InotifyEvent::IsType(evt.GetMask(), IN_IGNORED)) {
         // an IN_IGNORED for a descriptor we removed ourselves may
         // arrive after the descriptor was reused for a new watch -
         // only disable the watch if no removal was pending for it
         if (m_pendingIgnore.erase(pEvt->wd) == 0)
           pW->__Disable();
+        // IN_IGNORED is kernel bookkeeping - only queue it if the
+        // user explicitly asked for it in the watch mask
+        queue = InotifyEvent::IsType(pW->GetMask(), IN_IGNORED);
       }
       else if (InotifyEvent::IsType(pW->GetMask(), IN_ONESHOT))
         pW->__Disable();
-      m_events.push_back(evt);
+      if (queue)
+        m_events.push_back(evt);
     }
     else if (InotifyEvent::IsType(pEvt->mask, IN_IGNORED)) {
       // the watch is already gone - just drop the pending marker
