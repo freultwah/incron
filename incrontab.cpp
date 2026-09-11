@@ -61,9 +61,12 @@ IncronTabEntry::IncronTabEntry()
 IncronTabEntry::IncronTabEntry(const std::string& rPath, uint32_t uMask, const std::string& rCmd)
 : m_path(rPath),
   m_uMask(uMask),
-  m_cmd(rCmd)
+  m_cmd(rCmd),
+  m_fNoLoop(true),
+  m_fNoRecursion(false),
+  m_fDotDirs(false)
 {
-  
+
 }
 
 std::string IncronTabEntry::ToString() const
