@@ -20,6 +20,7 @@
 #include <map>
 #include <deque>
 #include <sys/poll.h>
+#include <sys/types.h>
 
 #include "inotify-cxx.h"
 #include "incrontab.h"
@@ -230,22 +231,43 @@ public:
   void RunAsUser(std::string cmd) const;
   
 private:
+  /// Cached user identity
+  /**
+   * getpwnam() may hit slow NSS backends (LDAP, SSSD) and must
+   * not be called for every single event.
+   */
+  struct CachedUser
+  {
+    bool m_valid;
+    uid_t m_uid;
+    gid_t m_gid;
+  };
+
   Inotify m_in;           ///< inotify object
   EventDispatcher* m_pEd; ///< event dispatcher
   std::string m_user;     ///< user name
   bool m_fSysTable;       ///< system table yes/no
   IncronTab m_tab;        ///< incron table
   IWCE_MAP m_map;         ///< watch-to-entry mapping
+  mutable CachedUser m_cachedUser; ///< cached user identity
 
   static PROC_MAP s_procMap;  ///< child process mapping
   
   /// Finds an entry for a watch.
   /**
-   * \param[in] pWatch inotify watch
+   * \param[in] pWatch watch
    * \return pointer to the appropriate entry; NULL if no such entry exists
    */
   IncronTabEntry* FindEntry(InotifyWatch* pWatch);
- 
+
+  /// Looks up the table user identity (cached).
+  /**
+   * \param[out] rUid user id
+   * \param[out] rGid primary group id
+   * \return true = user found, false = otherwise
+   */
+  bool lookupUser(uid_t& rUid, gid_t& rGid) const;
+
 };
 
 #endif //_USERTABLE_H_

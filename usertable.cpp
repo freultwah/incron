@@ -269,6 +269,7 @@ UserTable::UserTable(EventDispatcher* pEd, const std::string& rUser, bool fSysTa
   m_fSysTable(fSysTable)
 {
   m_pEd = pEd;
+  m_cachedUser.m_valid = false;
 
   m_in.SetNonBlock(true);
   m_in.SetCloseOnExec(true);
@@ -559,6 +560,27 @@ IncronTabEntry* UserTable::FindEntry(InotifyWatch* pWatch)
   return (*it).second;
 }
 
+bool UserTable::lookupUser(uid_t& rUid, gid_t& rGid) const
+{
+  if (m_cachedUser.m_valid) {
+    rUid = m_cachedUser.m_uid;
+    rGid = m_cachedUser.m_gid;
+    return true;
+  }
+
+  struct passwd* pwd = getpwnam(m_user.c_str());
+  if (pwd == NULL)
+    return false;
+
+  m_cachedUser.m_uid = pwd->pw_uid;
+  m_cachedUser.m_gid = pwd->pw_gid;
+  m_cachedUser.m_valid = true;
+
+  rUid = pwd->pw_uid;
+  rGid = pwd->pw_gid;
+  return true;
+}
+
 bool UserTable::MayAccess(const std::string& rPath, bool fNoFollow) const
 {
   // first, retrieve file permissions
@@ -573,21 +595,21 @@ bool UserTable::MayAccess(const std::string& rPath, bool fNoFollow) const
   if (st.st_mode & S_IRWXO)
     return true;
 
-  // retrieve user data
-  struct passwd* pwd = getpwnam(m_user.c_str());
-
-  if (pwd == NULL)
+  // retrieve user data (cached - see lookupUser)
+  uid_t uid;
+  gid_t gid;
+  if (!lookupUser(uid, gid))
     return false;
 
   // root may always access
-  if (pwd->pw_uid == 0)
+  if (uid == 0)
     return true;
 
   // file accessible to group
   if (st.st_mode & S_IRWXG) {
 
     // user's primary group
-    if (pwd->pw_gid == st.st_gid)
+    if (gid == st.st_gid)
         return true;
 
     // now check group database
@@ -605,7 +627,7 @@ bool UserTable::MayAccess(const std::string& rPath, bool fNoFollow) const
 
   // file accessible to owner
   if (st.st_mode & S_IRWXU) {
-    if (pwd->pw_uid == st.st_uid)
+    if (uid == st.st_uid)
       return true;
   }
 
