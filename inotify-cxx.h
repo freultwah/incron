@@ -282,11 +282,12 @@ public:
   /**
    * \param[in] uValue checked value
    * \param[in] uType type which is checked for
-   * \return true = the value contains the given type, false = otherwise
+   * \return true = the value contains all bits of the given type,
+   *         false = otherwise
    */
   inline static bool IsType(uint32_t uValue, uint32_t uType)
   {
-    return ((uValue & uType) != 0) && ((~uValue & uType) == 0);
+    return uType != 0 && (uValue & uType) == uType;
   }
   
   /// Checks for the event type.
