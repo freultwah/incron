@@ -44,7 +44,18 @@ public:
    * \param[in] rCmd command string
    */
   IncronTabEntry(const std::string& rPath, uint32_t uMask, const std::string& rCmd);
-  
+
+  /// Constructor.
+  /**
+   * Creates a copy of an entry with a different path.
+   * All other parameters (mask, command, flags) are inherited
+   * from the source entry.
+   *
+   * \param[in] rPath watched filesystem path
+   * \param[in] rOrig entry to copy the parameters from
+   */
+  IncronTabEntry(const std::string& rPath, const IncronTabEntry& rOrig);
+
   /// Destructor.
   ~IncronTabEntry() {}
   

@@ -69,6 +69,17 @@ IncronTabEntry::IncronTabEntry(const std::string& rPath, uint32_t uMask, const s
 
 }
 
+IncronTabEntry::IncronTabEntry(const std::string& rPath, const IncronTabEntry& rOrig)
+: m_path(rPath),
+  m_uMask(rOrig.m_uMask),
+  m_cmd(rOrig.m_cmd),
+  m_fNoLoop(rOrig.m_fNoLoop),
+  m_fNoRecursion(rOrig.m_fNoRecursion),
+  m_fDotDirs(rOrig.m_fDotDirs)
+{
+
+}
+
 std::string IncronTabEntry::ToString() const
 {
   std::ostringstream ss;

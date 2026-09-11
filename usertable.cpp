@@ -319,7 +319,7 @@ bool UserTable::Load()
       if (rE.GetPath() == subDir)
         continue;
 
-      tmp.Add(IncronTabEntry(subDir, rE.GetMask(), rE.GetCmd()));
+      tmp.Add(IncronTabEntry(subDir, rE));
     }
   }
 
@@ -549,7 +549,7 @@ void UserTable::OnSubDirCreated(const std::string& rSubDir, IncronTabEntry& rE)
 
   // register the new directory itself
   {
-    IncronTabEntry ite(rSubDir, rE.GetMask(), rE.GetCmd());
+    IncronTabEntry ite(rSubDir, rE);
     m_tab.Add(ite);
     AddTabEntry(m_tab.GetEntry(m_tab.GetCount() - 1));
   }
@@ -561,7 +561,7 @@ void UserTable::OnSubDirCreated(const std::string& rSubDir, IncronTabEntry& rE)
     if (m_in.FindWatch(ssvec[j]) != NULL)
       continue;
 
-    IncronTabEntry ite(ssvec[j], rE.GetMask(), rE.GetCmd());
+    IncronTabEntry ite(ssvec[j], rE);
     m_tab.Add(ite);
     AddTabEntry(m_tab.GetEntry(m_tab.GetCount() - 1));
   }
