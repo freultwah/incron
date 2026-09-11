@@ -510,10 +510,18 @@ void UserTable::OnEvent(InotifyEvent& rEvt)
     // for system table
     if (m_fSysTable) {
       int rc = system(cmd.c_str());
-      if (rc == -1) // fork/exec failed
+      // the child must not return to the event loop -
+      // exit with the job's own status
+      if (rc == -1) {
         syslog(LOG_ERR, "cannot exec process: %s", strerror(errno));
-      // the child must not return to the event loop
-      _exit(rc == 0 ? 0 : 1);
+        _exit(127);
+      }
+      else if (WIFEXITED(rc))
+        _exit(WEXITSTATUS(rc));
+      else if (WIFSIGNALED(rc))
+        _exit(128 + WTERMSIG(rc));
+      else
+        _exit(1);
     }
     else {
       // for user table (RunAsUser never returns)
