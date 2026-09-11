@@ -533,6 +533,14 @@ int main(int argc, char** argv)
     syslog(LOG_CRIT, "  %s", e.GetMessage().c_str());
     syslog(LOG_CRIT, "  error: (%i) %s", err, strerror(err));
     ret = 1;
+    // an exception may have occurred after the pipe was created -
+    // close it if so (configuration failures happen before it exists)
+    if (g_cldPipe[0] != -1)
+      close(g_cldPipe[0]);
+    if (g_cldPipe[1] != -1)
+      close(g_cldPipe[1]);
+    g_cldPipe[0] = -1;
+    g_cldPipe[1] = -1;
   }
 
 error:
