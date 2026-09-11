@@ -351,10 +351,13 @@ void Inotify::Add(InotifyWatch* pWatch) throw (InotifyException)
     throw InotifyException(IN_EXC_MSG("invalid file descriptor"), EBUSY, this);
   }
 
-  // this path already watched - go away  
-  if (FindWatch(pWatch->GetPath()) != NULL) {
-    IN_WRITE_END_NOTHROW
-    throw InotifyException(IN_EXC_MSG("path already watched"), EBUSY, this);
+  // this path already watched - go away
+  {
+    IN_WP_MAP::iterator it = m_paths.find(pWatch->GetPath());
+    if (it != m_paths.end()) {
+      IN_WRITE_END_NOTHROW
+      throw InotifyException(IN_EXC_MSG("path already watched"), EBUSY, this);
+    }
   }
   
   // for enabled watch
@@ -370,7 +373,7 @@ void Inotify::Add(InotifyWatch* pWatch) throw (InotifyException)
     }
     
     // this path already watched (but defined another way)
-    InotifyWatch* pW = FindWatch(wd);
+    InotifyWatch* pW = FindWatchLocked(wd);
     if (pW != NULL) {
       
       // try to recover old watch because it may be modified - then go away
@@ -465,7 +468,7 @@ void Inotify::WaitForEvents(bool fNoIntr) throw (InotifyException)
   size_t i = 0;
   while (i < static_cast<size_t>(len)) {
     struct inotify_event* pEvt = reinterpret_cast<struct inotify_event*>(&m_buf[i]);
-    InotifyWatch* pW = FindWatch(pEvt->wd);
+    InotifyWatch* pW = FindWatchLocked(pEvt->wd);
     if (pW != NULL) {
       InotifyEvent evt(pEvt, pW);
       if (    InotifyEvent::IsType(pW->GetMask(), IN_ONESHOT)
@@ -517,13 +520,18 @@ bool Inotify::PeekEvent(InotifyEvent* pEvt) throw (InotifyException)
 InotifyWatch* Inotify::FindWatch(int iDescriptor)
 {
   IN_READ_BEGIN
-  
-  IN_WATCH_MAP::iterator it = m_watches.find(iDescriptor);
-  InotifyWatch* pW = it == m_watches.end() ? NULL : (*it).second;
-  
+
+  InotifyWatch* pW = FindWatchLocked(iDescriptor);
+
   IN_READ_END
-  
+
   return pW;
+}
+
+InotifyWatch* Inotify::FindWatchLocked(int iDescriptor)
+{
+  IN_WATCH_MAP::iterator it = m_watches.find(iDescriptor);
+  return it == m_watches.end() ? NULL : (*it).second;
 }
 
 InotifyWatch* Inotify::FindWatch(const std::string& rPath)

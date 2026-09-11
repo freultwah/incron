@@ -879,7 +879,16 @@ private:
   IN_LOCK_DECL
   
   friend class InotifyWatch;
-  
+
+  /// Searches for a watch by descriptor without locking.
+  /**
+   * \attention Must only be called with the write lock held.
+   *
+   * \param[in] iDescriptor watch descriptor
+   * \return pointer to a watch; NULL if no such watch exists
+   */
+  InotifyWatch* FindWatchLocked(int iDescriptor);
+
   static std::string GetCapabilityPath(InotifyCapability_t cap) throw (InotifyException);
 };
 
