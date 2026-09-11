@@ -155,9 +155,13 @@ public:
   /**
    * All loaded entries have their inotify watches and are
    * registered for event dispatching.
-   * If loading fails the table remains empty.
+   * The table is parsed into a temporary storage first; if
+   * loading fails the previous table (and its watches) is
+   * kept unchanged.
+   *
+   * \return true = success, false = failure
    */
-  void Load();
+  bool Load();
   
   void AddTabEntry(IncronTabEntry& rE);
 

@@ -211,8 +211,8 @@ void EventDispatcher::ProcessMgmtEvents()
           UserTable* pUt = (*it).second;
           if (e.IsType(IN_CLOSE_WRITE) || e.IsType(IN_MOVED_TO)) {
             syslog(LOG_INFO, "system table %s changed, reloading", e.GetName().c_str());
-            pUt->Dispose();
-            pUt->Load();
+            if (!pUt->Load())
+              syslog(LOG_ERR, "cannot reload system table %s, keeping the old one", e.GetName().c_str());
           }
           else if (e.IsType(IN_MOVED_FROM) || e.IsType(IN_DELETE)) {
             syslog(LOG_INFO, "system table %s destroyed, removing", e.GetName().c_str());
@@ -239,8 +239,8 @@ void EventDispatcher::ProcessMgmtEvents()
           UserTable* pUt = (*it).second;
           if (e.IsType(IN_CLOSE_WRITE) || e.IsType(IN_MOVED_TO)) {
             syslog(LOG_INFO, "table for user %s changed, reloading", e.GetName().c_str());
-            pUt->Dispose();
-            pUt->Load();
+            if (!pUt->Load())
+              syslog(LOG_ERR, "cannot reload table for user %s, keeping the old one", e.GetName().c_str());
           }
           else if (e.IsType(IN_MOVED_FROM) || e.IsType(IN_DELETE)) {
             syslog(LOG_INFO, "table for user %s destroyed, removing",  e.GetName().c_str());
@@ -279,59 +279,66 @@ UserTable::~UserTable()
   Dispose();
 }
 
-void UserTable::Load()
+bool UserTable::Load()
 {
-  m_tab.Load(m_fSysTable
+  // parse and expand into a temporary table first - if the file
+  // cannot be read the current table (and its watches) is kept
+  IncronTab tmp;
+  if (!tmp.Load(m_fSysTable
       ? IncronTab::GetSystemTablePath(m_user)
-      : IncronTab::GetUserTablePath(m_user));
+      : IncronTab::GetUserTablePath(m_user)))
+    return false;
 
-  int cnt = m_tab.GetCount();
-  
+  int cnt = tmp.GetCount();
+
   // add all subdirectories (recursively) as new tab entries with same events
   for (int i=0; i<cnt; i++) {
-    IncronTabEntry& rE = m_tab.GetEntry(i);
-    
+    IncronTabEntry& rE = tmp.GetEntry(i);
+
     // skip if recursion is not wanted by user
     if (rE.IsNoRecursion())
-		continue;
-    
-    std::vector<std::string> ssvec = Executor::getSubDirVec (rE.GetPath(),rE.IsDotDirs());
-	if (rE.GetPath().find("*") != std::string::npos) 
-	{
-		std::vector<std::string> allfilesvec = Executor::getAllFilesByDescriptor (rE.GetPath(),rE.IsDotDirs());
-		
-		// add to ssvec but without duplicates - in case user defined a dirctory with subdirectories via star descriptor
-		for (unsigned int j=0; j<allfilesvec.size(); j++) 
-		{
-			if(std::find(ssvec.begin(), ssvec.end(), allfilesvec[j]) == ssvec.end()) 
-			{
-				ssvec.push_back(allfilesvec[j]);
-			}
-		}
-	}    
-    for (unsigned int j=0; j<ssvec.size(); j++) {
-	  std::string subDir = ssvec[j];
-	  
-	  // skip if the subdir is the dir itself
-	  if (rE.GetPath() == subDir )
-		continue;
-		
-	  IncronTabEntry ite = IncronTabEntry(subDir, rE.GetMask(), rE.GetCmd());
-	  m_tab.Add(ite);
+      continue;
+
+    std::vector<std::string> ssvec = Executor::getSubDirVec(rE.GetPath(), rE.IsDotDirs());
+    if (rE.GetPath().find("*") != std::string::npos)
+    {
+      std::vector<std::string> allfilesvec = Executor::getAllFilesByDescriptor(rE.GetPath(), rE.IsDotDirs());
+
+      // add to ssvec but without duplicates - in case user defined a directory with subdirectories via star descriptor
+      for (size_t j=0; j<allfilesvec.size(); j++)
+      {
+        if (std::find(ssvec.begin(), ssvec.end(), allfilesvec[j]) == ssvec.end())
+          ssvec.push_back(allfilesvec[j]);
+      }
+    }
+    for (size_t j=0; j<ssvec.size(); j++) {
+      std::string subDir = ssvec[j];
+
+      // skip if the subdir is the dir itself
+      if (rE.GetPath() == subDir)
+        continue;
+
+      tmp.Add(IncronTabEntry(subDir, rE.GetMask(), rE.GetCmd()));
     }
   }
-  
-  // recount table elements too iterate over all of them
+
+  // swap the new table in and rebuild all watches
+  m_tab = tmp;
+
+  Dispose();
+
+  // recount table elements to iterate over all of them
   cnt = m_tab.GetCount();
   for (int i=0; i<cnt; i++) {
     IncronTabEntry& rE = m_tab.GetEntry(i);
-    // skip the wildcard selector, as they have been replace by the actual files
-	if (rE.GetPath().find("*") != std::string::npos) 
-		continue;
-	AddTabEntry(rE);
+    // skip the wildcard selector, as it has been replaced by the actual files
+    if (rE.GetPath().find("*") != std::string::npos)
+      continue;
+    AddTabEntry(rE);
   }
-  
+
   m_pEd->Register(this);
+  return true;
 }
 
 void UserTable::AddTabEntry(IncronTabEntry& rE)
