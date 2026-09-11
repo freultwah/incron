@@ -30,6 +30,7 @@
 #include <string>
 #include <deque>
 #include <map>
+#include <set>
 
 // Please ensure that the following headers take the right place
 #include <sys/syscall.h>
@@ -510,7 +511,7 @@ private:
   /**
    * This method must be called after receiving an event.
    * It ensures the watch object is consistent with the kernel
-   * data. 
+   * data. It is idempotent and never throws.
    */
   void __Disable();
 };
@@ -875,6 +876,7 @@ private:
   IN_WP_MAP m_paths;                    ///< watches (by paths)
   unsigned char m_buf[INOTIFY_BUFLEN];  ///< buffer for events
   std::deque<InotifyEvent> m_events;    ///< event queue
+  std::set<int32_t> m_pendingIgnore;    ///< descriptors awaiting IN_IGNORED
   
   IN_LOCK_DECL
   

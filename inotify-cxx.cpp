@@ -272,6 +272,9 @@ void InotifyWatch::SetEnabled(bool fEnabled) throw (InotifyException)
         throw InotifyException(IN_EXC_MSG("disabling watch failed"), errno, this);
       }
       m_pInotify->m_watches.erase(m_wd);
+      // remember that an IN_IGNORED event is on its way for this
+      // descriptor - it must not disable a watch reusing the same wd
+      m_pInotify->m_pendingIgnore.insert(m_wd);
       m_wd = -1;
     }
   }
@@ -285,19 +288,14 @@ void InotifyWatch::SetEnabled(bool fEnabled) throw (InotifyException)
 void InotifyWatch::__Disable()
 {
   IN_WRITE_BEGIN
-  
-  if (!m_fEnabled) {
-    IN_WRITE_END_NOTHROW
-    throw InotifyException(IN_EXC_MSG("event cannot occur on disabled watch"), EINVAL, this);
-  }
-  
+
   if (m_pInotify != NULL) {
     m_pInotify->m_watches.erase(m_wd);
     m_wd = -1;
   }
-  
+
   m_fEnabled = false;
-  
+
   IN_WRITE_END
 }
 
@@ -418,6 +416,11 @@ void Inotify::Remove(InotifyWatch* pWatch) throw (InotifyException)
         throw InotifyException(IN_EXC_MSG("removing watch failed"), errno, this);
       }
     }
+    else {
+      // an IN_IGNORED event will follow - mark the descriptor so a
+      // later watch reusing the same wd is not disabled by it
+      m_pendingIgnore.insert(pWatch->m_wd);
+    }
     m_watches.erase(pWatch->m_wd);
     pWatch->m_wd = -1;
   }
@@ -456,6 +459,7 @@ void Inotify::RemoveAll()
   m_watches.clear();
   m_paths.clear();
   m_events.clear();
+  m_pendingIgnore.clear();
 
   IN_WRITE_END
 }
@@ -482,10 +486,20 @@ void Inotify::WaitForEvents(bool fNoIntr) throw (InotifyException)
     InotifyWatch* pW = FindWatchLocked(pEvt->wd);
     if (pW != NULL) {
       InotifyEvent evt(pEvt, pW);
-      if (    InotifyEvent::IsType(pW->GetMask(), IN_ONESHOT)
-          ||  InotifyEvent::IsType(evt.GetMask(), IN_IGNORED))
+      if (InotifyEvent::IsType(evt.GetMask(), IN_IGNORED)) {
+        // an IN_IGNORED for a descriptor we removed ourselves may
+        // arrive after the descriptor was reused for a new watch -
+        // only disable the watch if no removal was pending for it
+        if (m_pendingIgnore.erase(pEvt->wd) == 0)
+          pW->__Disable();
+      }
+      else if (InotifyEvent::IsType(pW->GetMask(), IN_ONESHOT))
         pW->__Disable();
       m_events.push_back(evt);
+    }
+    else if (InotifyEvent::IsType(pEvt->mask, IN_IGNORED)) {
+      // the watch is already gone - just drop the pending marker
+      m_pendingIgnore.erase(pEvt->wd);
     }
     i += INOTIFY_EVENT_SIZE + pEvt->len;
   }
