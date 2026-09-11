@@ -182,8 +182,12 @@ void load_tables(EventDispatcher* pEd) throw (InotifyException)
 
         syslog(LOG_INFO, "loading table %s", pDe->d_name);
         UserTable* pUt = new UserTable(pEd, un, true);
-        g_ut.insert(SUT_MAP::value_type(path, pUt));
-        pUt->Load();
+        if (pUt->Load())
+          g_ut.insert(SUT_MAP::value_type(path, pUt));
+        else {
+          syslog(LOG_WARNING, "cannot load table %s (ignored)", pDe->d_name);
+          delete pUt;
+        }
       }
     }
     
@@ -218,8 +222,12 @@ void load_tables(EventDispatcher* pEd) throw (InotifyException)
       if (UserTable::CheckUser(pDe->d_name)) {
         syslog(LOG_INFO, "loading table for user %s", pDe->d_name);
         UserTable* pUt = new UserTable(pEd, un, false);
-        g_ut.insert(SUT_MAP::value_type(path, pUt));
-        pUt->Load();
+        if (pUt->Load())
+          g_ut.insert(SUT_MAP::value_type(path, pUt));
+        else {
+          syslog(LOG_WARNING, "cannot load table for user %s (ignored)", pDe->d_name);
+          delete pUt;
+        }
       }
       else {
         syslog(LOG_WARNING, "table for invalid user %s found (ignored)", pDe->d_name);
