@@ -90,6 +90,35 @@ static void notify_main(char token)
   }
 }
 
+/// Closes the child notification pipe.
+/**
+ * The signals that write to the pipe are blocked and the write end
+ * is closed before the read end, so a signal handler cannot write to
+ * a pipe that has no reader anymore (which would raise SIGPIPE).
+ */
+static void close_child_pipe()
+{
+  sigset_t set;
+  sigset_t old;
+  sigemptyset(&set);
+  sigaddset(&set, SIGCHLD);
+  sigaddset(&set, SIGTERM);
+  sigaddset(&set, SIGINT);
+  sigprocmask(SIG_BLOCK, &set, &old);
+
+  int wr = g_cldPipe[1];
+  int rd = g_cldPipe[0];
+  g_cldPipe[0] = -1;
+  g_cldPipe[1] = -1;
+
+  if (wr != -1)
+    close(wr);
+  if (rd != -1)
+    close(rd);
+
+  sigprocmask(SIG_SETMASK, &old, NULL);
+}
+
 /// Daemonize true/false
 bool g_daemon = true;
 
@@ -521,12 +550,7 @@ int main(int argc, char** argv)
     // always dispose the tables while the dispatcher is still alive
     free_tables(&ed);
 
-    if (g_cldPipe[0] != -1)
-      close(g_cldPipe[0]);
-    if (g_cldPipe[1] != -1)
-      close(g_cldPipe[1]);
-    g_cldPipe[0] = -1;
-    g_cldPipe[1] = -1;
+    close_child_pipe();
   } catch (InotifyException e) {
     int err = e.GetErrorNumber();
     syslog(LOG_CRIT, "*** unhandled exception occurred ***");
@@ -535,12 +559,7 @@ int main(int argc, char** argv)
     ret = 1;
     // an exception may have occurred after the pipe was created -
     // close it if so (configuration failures happen before it exists)
-    if (g_cldPipe[0] != -1)
-      close(g_cldPipe[0]);
-    if (g_cldPipe[1] != -1)
-      close(g_cldPipe[1]);
-    g_cldPipe[0] = -1;
-    g_cldPipe[1] = -1;
+    close_child_pipe();
   }
 
 error:
